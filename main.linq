@@ -25,6 +25,55 @@ void Main()
 	w2.Dump("w2");
 }
 
+public record MLP(int[] Sizes)
+{
+	public Layer[] Layers { get; private set; } =
+		Enumerable
+			.Range(0, Sizes.Length - 1)
+			.Select(i => new Layer(Sizes[i], Sizes[i + i], i == Sizes.Length - 2))
+			.ToArray();
+			
+	public Node[] Forward(Node[] xs)
+	{
+		foreach (var layer in Layers)
+		{
+			xs = layer.Forward(xs);
+		}
+		
+		return xs;
+	}
+}
+
+public record Layer(int In, int Out, bool Linear)
+{
+	public Neuron[] Neurons { get; private set; } =
+		Enumerable
+			.Range(0, Out)
+			.Select(_ => new Neuron(In, Linear))
+			.ToArray();
+			
+	public Node[] Forward(Node[] xs)
+		=> Neurons.Select(n => n.Forward(xs)).ToArray();
+}
+
+public record Neuron(int N, bool Linear)
+{
+	public Node[] Weights { get; private set; } = 
+		Enumerable
+			.Range(0, N)
+			.Select(_ => new Node(Random.Shared.NextDouble()))
+			.ToArray();
+
+	public Node Bias { get; private set; } = Random.Shared.NextDouble();
+	
+	public Node Forward(Node[] xs)
+	{
+		var result = Weights.Zip(xs, (w, x) => w * x).Aggregate((acc, n) => acc + n) + Bias;
+		
+		return Linear ? result : result.ReLU();
+	}
+}
+
 public record Node(double Value)
 {
 	public double Gradient { get; private set; } = 0;
@@ -88,6 +137,16 @@ public record Node(double Value)
 		sorted.Add(node);
 	}
 	
+	public Node ReLU()
+	{
+		var result = new Node(Value < 0 ? 0 : Value, (this, null), OpType.Relu);
+		result._backprop = () =>
+		{
+			Gradient += (result.Value > 0 ? 1 : 0) * result.Gradient;
+		};
+		return result;
+	}
+
 	public Node Exp()
 	{
 		var result = new Node(Math.Exp(Value), (this, null), OpType.Exp);
@@ -135,6 +194,7 @@ public record Node(double Value)
 		Add,
 		Mul,
 		Pow,
-		Exp
+		Exp,
+		Relu
 	}
 }
