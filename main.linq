@@ -9,7 +9,7 @@
 void Main()
 {
 	var td = ReadData(@"C:\datasets\mnist\mnist_train.csv", 1, 100);    
-    var model = new MLP(784, 10);
+    var model = new MLP(784, 512, 512, 10);
     
     Train(td, model, 10, 1e-3)
         .Chart(x => x.epoch, x => x.loss.Value, SeriesType.Line)
