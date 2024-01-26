@@ -1,36 +1,65 @@
-<Query Kind="Program" />
+<Query Kind="Program">
+  <Namespace>static LINQPad.Util</Namespace>
+</Query>
 
 #nullable enable
 
 void Main()
 {
-	Node x1 = 2;
-	Node x2 = 0;
-	
-	Node w1 = -3;
-	Node w2 = 1;
-	
-	Node b = 6.8813735870195432;
-	
-	var n = x1 * w1 + x2 * w2 + b;
-	var e = (2 * n).Exp();
-	var o = (e + -1) * ((e + 1) ^ -1);
-	
-	o.ZeroGrad();
-	o.Backprop();
-	
-	x1.Dump("x1");
-	w1.Dump("w1");
-	x2.Dump("x2");
-	w2.Dump("w2");
+    var f = (double x) => Math.Pow(x, 2) + x + 1;
+    var td = Enumerable
+        .Range(1, 10)
+        .Select(x => (xs: new Node[] { x }, y: new Node(f(x))))
+        .ToArray();
+        
+    var model = new MLP(1, 1);
+    
+    Train(td, model, 10000, 1e-5)
+        .Chart(x => x.epoch, x => x.loss.Value, SeriesType.Line)
+        .Dump();
+
+    List<(int epoch, Node loss)> Train((Node[], Node)[] td, MLP model, int epochs, double learningRate)
+    {
+        var losses = new List<(int, Node)>();
+        for (var i = 0; i < epochs; i++)
+        {
+            var loss = MSE(td, model);
+            losses.Add((i, loss));
+            
+            model.ZeroGrad();
+            loss.Backprop();
+
+            model.Update(learningRate);
+        }
+        return losses;
+    }
+
+    Node MSE((Node[], Node)[] td, MLP model)
+    {
+        Node result = 0;
+        var preds = new List<Node>();
+        
+        foreach (var (inputs, expected) in td)
+        {
+            var prediction = model.Forward(inputs)[0];
+            preds.Add(prediction);
+            var error = prediction + new Node(-expected.Value);
+            result += error * error;
+        }
+        
+        return result * (new Node(td.Length) ^ (-1));
+    }
 }
 
-public record MLP(int[] Sizes)
+/// <summary>
+/// Input: int, Outputs: int[] -> [Input, ..Outputs]
+/// </summary>
+public record MLP(params int[] Sizes)
 {
 	public Layer[] Layers { get; private set; } =
 		Enumerable
 			.Range(0, Sizes.Length - 1)
-			.Select(i => new Layer(Sizes[i], Sizes[i + i], i == Sizes.Length - 2))
+			.Select(i => new Layer(Sizes[i], Sizes[i + 1], i == Sizes.Length - 2))
 			.ToArray();
 			
 	public Node[] Forward(Node[] xs)
@@ -42,6 +71,24 @@ public record MLP(int[] Sizes)
 		
 		return xs;
 	}
+
+    public IEnumerable<Node> Parameters => Layers.SelectMany(n => n.Parameters);
+
+    public void ZeroGrad()
+    {
+        foreach (var node in Parameters)
+        {
+            node.ZeroGrad();
+        }
+    }
+    
+    public void Update(double learningRate)
+    {
+        foreach (var node in Parameters)
+        {
+            node.Update(learningRate);
+        }
+    }
 }
 
 public record Layer(int In, int Out, bool Linear)
@@ -54,6 +101,8 @@ public record Layer(int In, int Out, bool Linear)
 			
 	public Node[] Forward(Node[] xs)
 		=> Neurons.Select(n => n.Forward(xs)).ToArray();
+
+    public IEnumerable<Node> Parameters => Neurons.SelectMany(n => n.Parameters);
 }
 
 public record Neuron(int N, bool Linear)
@@ -72,10 +121,13 @@ public record Neuron(int N, bool Linear)
 		
 		return Linear ? result : result.ReLU();
 	}
+    
+    public IEnumerable<Node> Parameters => Weights.Append(Bias);
 }
 
-public record Node(double Value)
+public class Node(double Value)
 {
+    public double Value { get; private set; } = Value;
 	public double Gradient { get; private set; } = 0;
 
 	private (Node, Node?)? _parents;
@@ -87,6 +139,11 @@ public record Node(double Value)
 		_parents = parents;
 		_op = op;
 	}
+
+    public void Update(double learningRate)
+    {
+        Value -= learningRate * Gradient;
+    }
 
 	public void ZeroGrad()
 	{
