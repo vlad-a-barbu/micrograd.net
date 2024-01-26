@@ -1,68 +1,81 @@
 <Query Kind="Program">
   <Namespace>static LINQPad.Util</Namespace>
   <Namespace>System.Threading.Tasks</Namespace>
+  <Namespace>System.Collections.Concurrent</Namespace>
 </Query>
 
 #nullable enable
 
 void Main()
 {
-	var td = ReadData(@"C:\Users\vb\Downloads\archive\mnist_train.csv", 1);    
-    var model = new MLP(784, 10, 1);
+	var td = ReadData(@"C:\datasets\mnist\mnist_train.csv", 1, 100);    
+    var model = new MLP(784, 10);
     
-    Train(td, model, 5, 1e-3)
+    Train(td, model, 10, 1e-3)
         .Chart(x => x.epoch, x => x.loss.Value, SeriesType.Line)
         .Dump();
 
-    List<(int epoch, Node loss)> Train((Node[], Node)[] td, MLP model, int epochs, double learningRate)
-    {
-        var losses = new List<(int, Node)>();
-        for (var i = 0; i < epochs; i++)
-        {
-            var loss = MSE(td, model);
-            losses.Add((i, loss));
-
-			loss.Dump($"epoch {i}");
-            
-            model.ZeroGrad();
-            loss.Backprop();
-
-            model.Update(learningRate);
-        }
-        return losses;
-    }
-
-    Node MSE((Node[], Node)[] td, MLP model)
-    {
-        Node result = 0;
-        var preds = new List<Node>();
-        
-        foreach (var (inputs, expected) in td)
-        {
-            var prediction = model.Forward(inputs)[0];
-            preds.Add(prediction);
-            var error = prediction + new Node(-expected.Value);
-            result += error * error;
-        }
-        
-        return result * (new Node(td.Length) ^ (-1));
-    }
-
-
-	(Node[] xs, Node y)[] ReadData(string path, int offset)
+	List<(int epoch, Node loss)> Train((Node[], Node)[] td, MLP model, int epochs, double learningRate)
 	{
+		var losses = new List<(int, Node)>();
+		for (var i = 0; i < epochs; i++)
+		{
+			var loss = CrossEntropyLoss(td, model);
+			losses.Add((i, loss));
+
+			loss.Dump($"epoch {i + 1}");
+
+			model.ZeroGrad();
+			loss.Backprop();
+
+			model.Update(learningRate);
+		}
+		return losses;
+	}
+
+	Node[] Softmax(Node[] outputs)
+	{
+		var maxVal = outputs.Max(o => o.Value);
+		var exps = outputs.Select(o => (o + -maxVal).Exp()).ToArray();
+		var sumExps = exps.Aggregate((acc, v) => acc + v);
+		return exps.Select(v => v * (sumExps ^ -1)).ToArray();
+	}
+
+	Node CrossEntropyLoss((Node[], Node)[] td, MLP model)
+	{
+		Node loss = 0;
+		foreach (var (inputs, expected) in td)
+		{
+			var outputs = Softmax(model.Forward(inputs));
+			var target = new Node[10].Select((_, index) => index == expected.Value ? 1 : 0).ToArray();
+			var epsilon = 1e-10;
+			var error = target.Zip(outputs, (t, o) => t * (o + epsilon).Log()).Aggregate((acc, n) => acc + n);
+			loss += error * -1;
+		}
+		return loss * (new Node(1.0 / td.Length));
+	}
+
+	(Node[] xs, Node y)[] ReadData(string path, int offset, int nclass)
+	{
+		var counts = Enumerable.Range(0, 10).ToDictionary(x => x * 1.0, _ => 0);
 		var data = new List<(Node[] xs, Node y)>();
 		
 		using var reader = new StreamReader(File.OpenRead(path));
 		var lptr = 0;
-		while (!reader.EndOfStream)
+		var done = false;
+		while (!reader.EndOfStream && !done)
 		{
 			var line = reader.ReadLine()!;
 			if (lptr++ < offset) continue;
 			var values = line.Split(',');
-			Node label = double.Parse(values[0]);
-			Node[] pixels = values.Skip(1).Select(v => new Node(double.Parse(v))).ToArray();
-			data.Add((pixels, label));
+			var label = double.Parse(values[0]);
+			if (counts[label] < nclass)
+			{
+				counts[label]++;
+				var pixels = values.Skip(1).Select(v => new Node(double.Parse(v))).ToArray();
+				data.Add((pixels, label));
+			}
+			if (counts.Values.All(x => x == nclass)) done = true;
 		}
 		
 		return data.ToArray();
@@ -119,7 +132,7 @@ public record Layer(int In, int Out, bool Linear)
 
 	public Node[] Forward(Node[] xs)
 	{
-		var results = new List<Node>();
+		var results = new ConcurrentBag<Node>();
 		Parallel.ForEach(Neurons, neuron => 
 		{
 			results.Add(neuron.Forward(xs));
@@ -229,6 +242,16 @@ public class Node(double Value)
 		return result;
 	}
 
+	public Node Log()
+	{
+		var result = new Node(Math.Log(Value), (this, null), OpType.Log);
+		result._backprop = () =>
+		{
+			Gradient += (1 / Value) * result.Gradient;
+		};
+		return result;
+	}
+
 	public Node Exp()
 	{
 		var result = new Node(Math.Exp(Value), (this, null), OpType.Exp);
@@ -277,6 +300,7 @@ public class Node(double Value)
 		Mul,
 		Pow,
 		Exp,
-		Relu
+		Relu,
+		Log
 	}
 }
