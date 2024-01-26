@@ -1,20 +1,16 @@
 <Query Kind="Program">
   <Namespace>static LINQPad.Util</Namespace>
+  <Namespace>System.Threading.Tasks</Namespace>
 </Query>
 
 #nullable enable
 
 void Main()
 {
-    var f = (double x) => Math.Pow(x, 2) + x + 1;
-    var td = Enumerable
-        .Range(1, 10)
-        .Select(x => (xs: new Node[] { x }, y: new Node(f(x))))
-        .ToArray();
-        
-    var model = new MLP(1, 1);
+	var td = ReadData(@"C:\Users\vb\Downloads\archive\mnist_train.csv", 1);    
+    var model = new MLP(784, 10, 1);
     
-    Train(td, model, 10000, 1e-5)
+    Train(td, model, 5, 1e-3)
         .Chart(x => x.epoch, x => x.loss.Value, SeriesType.Line)
         .Dump();
 
@@ -25,6 +21,8 @@ void Main()
         {
             var loss = MSE(td, model);
             losses.Add((i, loss));
+
+			loss.Dump($"epoch {i}");
             
             model.ZeroGrad();
             loss.Backprop();
@@ -49,6 +47,26 @@ void Main()
         
         return result * (new Node(td.Length) ^ (-1));
     }
+
+
+	(Node[] xs, Node y)[] ReadData(string path, int offset)
+	{
+		var data = new List<(Node[] xs, Node y)>();
+		
+		using var reader = new StreamReader(File.OpenRead(path));
+		var lptr = 0;
+		while (!reader.EndOfStream)
+		{
+			var line = reader.ReadLine()!;
+			if (lptr++ < offset) continue;
+			var values = line.Split(',');
+			Node label = double.Parse(values[0]);
+			Node[] pixels = values.Skip(1).Select(v => new Node(double.Parse(v))).ToArray();
+			data.Add((pixels, label));
+		}
+		
+		return data.ToArray();
+	}
 }
 
 /// <summary>
@@ -98,9 +116,16 @@ public record Layer(int In, int Out, bool Linear)
 			.Range(0, Out)
 			.Select(_ => new Neuron(In, Linear))
 			.ToArray();
-			
+
 	public Node[] Forward(Node[] xs)
-		=> Neurons.Select(n => n.Forward(xs)).ToArray();
+	{
+		var results = new List<Node>();
+		Parallel.ForEach(Neurons, neuron => 
+		{
+			results.Add(neuron.Forward(xs));
+		});
+		return results.ToArray();
+	}
 
     public IEnumerable<Node> Parameters => Neurons.SelectMany(n => n.Parameters);
 }
